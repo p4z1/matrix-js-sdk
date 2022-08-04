@@ -363,7 +363,7 @@ export class GroupCall extends TypedEventEmitter<
                 "feeds": [],
             };
 
-            const newCall = createNewMatrixCall(
+            const sfuCall = createNewMatrixCall(
                 this.client,
                 this.room.roomId,
                 {
@@ -377,11 +377,11 @@ export class GroupCall extends TypedEventEmitter<
                 },
             );
 
-            newCall.isPtt = this.isPtt;
+            sfuCall.isPtt = this.isPtt;
 
             try {
-                await newCall.placeCallWithCallFeeds(this.getLocalFeeds());  // TODO: We should just setup the datachannel
-                newCall.createDataChannel("datachannel", this.dataChannelOptions);
+                await sfuCall.placeCallWithCallFeeds(this.getLocalFeeds());  // TODO: We should just setup the datachannel
+                sfuCall.createDataChannel("datachannel", this.dataChannelOptions);
             } catch (e) {
                 logger.warn(`Failed to place call to ${this.client.getSFU().user_id}!`, e);
                 this.emit(
@@ -394,7 +394,7 @@ export class GroupCall extends TypedEventEmitter<
                 return;
             }
 
-            this.addCall(newCall);
+            this.addCall(sfuCall);
         }
     }
 
@@ -639,10 +639,10 @@ export class GroupCall extends TypedEventEmitter<
 
                 // TODO: handle errors
                 await Promise.all(this.calls.map(call => call.pushLocalFeed(
-                    this.localScreenshareFeed.clone(),
+                    this.client.getSFU().user_id
+                        ? this.localScreenshareFeed
+                        : this.localScreenshareFeed.clone(),
                 )));
-
-                await this.sendMemberStateEvent();
 
                 return true;
             } catch (error) {
@@ -654,11 +654,12 @@ export class GroupCall extends TypedEventEmitter<
             }
         } else {
             await Promise.all(this.calls.map(call => call.removeLocalFeed(call.localScreensharingFeed)));
-            this.client.getMediaHandler().stopScreensharingStream(this.localScreenshareFeed.stream);
-            this.removeScreenshareFeed(this.localScreenshareFeed);
+            if (!this.client.getSFU().user_id) {
+                this.client.getMediaHandler().stopScreensharingStream(this.localScreenshareFeed.stream);
+                this.removeScreenshareFeed(this.localScreenshareFeed);
+            }
             this.localScreenshareFeed = undefined;
             this.localDesktopCapturerSourceId = undefined;
-            await this.sendMemberStateEvent();
             this.emit(GroupCallEvent.LocalScreenshareStateChanged, false, undefined, undefined);
             return false;
         }
@@ -740,22 +741,7 @@ export class GroupCall extends TypedEventEmitter<
                 {
                     "device_id": this.client.getDeviceId(),
                     "session_id": this.client.getSessionId(),
-                    "feeds": this.getLocalFeeds().map((feed) => ({
-                        purpose: feed.purpose,
-                        id: feed.stream.id,
-
-                        // we have to advertise the actual tracks we're sending to the SFU from the PC
-                        // we can't use the feeds' mediaStream IDs, as they are local rather than the copy
-                        // sent over WebRTC
-                        //
-                        // TODO: correctly track which rtpSenders are associated with which feed
-                        // rather than assuming that all our senders are from this feed.
-                        tracks: this.calls[0]
-                            ? this.calls[0].peerConn.getSenders().filter((s) => s.track).map(s => ({
-                                "id": s.track.id,
-                            }))
-                            : undefined,
-                    })),
+                    "feeds": this.calls[0]?.getGroupCallRoomMemberFeeds(),
                     // TODO: Add data channels
                 },
             ],
@@ -1137,6 +1123,8 @@ export class GroupCall extends TypedEventEmitter<
     }
 
     private onCallFeedsChanged = (call: MatrixCall) => {
+        this.sendMemberStateEvent();
+
         // Find removed feeds
         [...this.userMediaFeeds, ...this.screenshareFeeds].filter((gf) => gf.isDisposed()).forEach((feed) => {
             if (feed.purpose === SDPStreamMetadataPurpose.Usermedia) this.removeUserMediaFeed(feed);

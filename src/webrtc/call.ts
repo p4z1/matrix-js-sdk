@@ -48,6 +48,9 @@ import {
     ISfuBaseDataChannelMessage,
     ISfuSelectDataChannelMessage,
     ISfuAnswerDataChannelMessage,
+    ISfuPublishDataChannelMessage,
+    ISfuUnpublishDataChannelMessage,
+    ISfuOfferDataChannelMessage,
 } from './callEventTypes';
 import { CallFeed } from './callFeed';
 import { MatrixClient } from "../client";
@@ -354,8 +357,8 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
     private candidateSendTries = 0;
     private sentEndOfCandidates = false;
     private feeds: Array<CallFeed> = [];
-    private usermediaSenders: Array<RTCRtpSender> = [];
-    private screensharingSenders: Array<RTCRtpSender> = [];
+    private usermediaSenders: Array<RTCRtpTransceiver> = [];
+    private screensharingSenders: Array<RTCRtpTransceiver> = [];
     private subscribedTracks: ISfuTrackDesc[] = [];
     private inviteOrAnswerSent = false;
     private waitForLocalAVStream: boolean;
@@ -599,6 +602,25 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
         return metadata;
     }
 
+    public getGroupCallRoomMemberFeeds(): IGroupCallRoomMemberFeed[] {
+        const feeds: IGroupCallRoomMemberFeed[] = [];
+        for (const feed of this.getLocalFeeds()) {
+            const senders = feed.purpose === SDPStreamMetadataPurpose.Usermedia
+                ? this.usermediaSenders
+                : this.screensharingSenders;
+            if (!senders.length) continue;
+
+            feeds.push({
+                id: feed.stream.id,
+                purpose: feed.purpose,
+                tracks: senders.map((t) => ({
+                    id: t.sender.track.id,
+                })),
+            });
+        }
+        return feeds;
+    }
+
     /**
      * Returns true if there are no incoming feeds,
      * otherwise returns false
@@ -737,10 +759,10 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
         this.feeds.push(callFeed);
 
         if (addToPeerConnection) {
-            const senderArray = callFeed.purpose === SDPStreamMetadataPurpose.Usermedia ?
+            const transceiverArray = callFeed.purpose === SDPStreamMetadataPurpose.Usermedia ?
                 this.usermediaSenders : this.screensharingSenders;
             // Empty the array
-            senderArray.splice(0, senderArray.length);
+            transceiverArray.splice(0, transceiverArray.length);
 
             for (const track of callFeed.stream.getTracks()) {
                 logger.info(
@@ -753,7 +775,9 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     `enabled=${track.enabled}` +
                     `) to peer connection`,
                 );
-                senderArray.push(this.peerConn.addTrack(track, callFeed.stream));
+                transceiverArray.push(this.peerConn.addTransceiver(track, {
+                    streams: [callFeed.stream],
+                }));
             }
         }
 
@@ -765,7 +789,21 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             `purpose="${callFeed.purpose}")`,
         );
 
-        this.emit(CallEvent.FeedsChanged, this.feeds);
+        // If we're calling with an SFU and we aren't setting up the call, we
+        // send the offer manually
+        if (this.client.getSFU() && this.state !== CallState.Fledgling) {
+            this.peerConn.createOffer().then((offer) => {
+                this.peerConn.setLocalDescription(offer);
+
+                this.sendSFUDataChannelMessage({
+                    op: "publish",
+                    sdp: offer.sdp,
+                } as ISfuPublishDataChannelMessage);
+                this.emit(CallEvent.FeedsChanged, this.feeds);
+            });
+        } else {
+            this.emit(CallEvent.FeedsChanged, this.feeds);
+        }
     }
 
     /**
@@ -778,8 +816,13 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             ? this.usermediaSenders
             : this.screensharingSenders;
 
+        const tracksToUnpublish: ISfuTrackDesc[] = [];
         for (const sender of senderArray) {
-            this.peerConn.removeTrack(sender);
+            tracksToUnpublish.push({
+                stream_id: callFeed.stream.id,
+                track_id: sender.sender.track.id,
+            });
+            this.peerConn.removeTrack(sender.sender);
         }
 
         if (callFeed.purpose === SDPStreamMetadataPurpose.Screenshare) {
@@ -789,6 +832,18 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
         // Empty the array
         senderArray.splice(0, senderArray.length);
         this.deleteFeed(callFeed);
+
+        if (this.client.getSFU()) {
+            this.peerConn.createOffer().then((offer) => {
+                this.peerConn.setLocalDescription(offer);
+
+                this.sendSFUDataChannelMessage({
+                    op: "unpublish",
+                    sdp: offer.sdp,
+                    stop: tracksToUnpublish,
+                } as ISfuUnpublishDataChannelMessage);
+            });
+        }
     }
 
     private deleteAllFeeds(): void {
@@ -1157,7 +1212,7 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             }
         } else {
             for (const sender of this.screensharingSenders) {
-                this.peerConn.removeTrack(sender);
+                this.peerConn.removeTrack(sender.sender);
             }
             this.client.getMediaHandler().stopScreensharingStream(this.localScreensharingStream);
             this.deleteFeedByStream(this.localScreensharingStream);
@@ -1185,9 +1240,9 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     return track.kind === "video";
                 });
                 const sender = this.usermediaSenders.find((sender) => {
-                    return sender.track?.kind === "video";
+                    return sender.sender.track?.kind === "video";
                 });
-                sender.replaceTrack(track);
+                sender.sender.replaceTrack(track);
 
                 this.pushNewLocalFeed(stream, SDPStreamMetadataPurpose.Screenshare, false);
 
@@ -1201,9 +1256,9 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                 return track.kind === "video";
             });
             const sender = this.usermediaSenders.find((sender) => {
-                return sender.track?.kind === "video";
+                return sender.sender.track?.kind === "video";
             });
-            sender.replaceTrack(track);
+            sender.sender.replaceTrack(track);
 
             this.client.getMediaHandler().stopScreensharingStream(this.localScreensharingStream);
             this.deleteFeedByStream(this.localScreensharingStream);
@@ -1240,10 +1295,10 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
 
         for (const track of stream.getTracks()) {
             const oldSender = this.usermediaSenders.find((sender) => {
-                return sender.track?.kind === track.kind;
+                return sender.sender.track?.kind === track.kind;
             });
 
-            let newSender: RTCRtpSender;
+            let newSender: RTCRtpTransceiver;
 
             try {
                 logger.info(
@@ -1255,7 +1310,7 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     `streamPurpose="${callFeed.purpose}"` +
                     `) to peer connection`,
                 );
-                await oldSender.replaceTrack(track);
+                await oldSender.sender.replaceTrack(track);
                 newSender = oldSender;
             } catch (error) {
                 logger.info(
@@ -1267,7 +1322,9 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     `streamPurpose="${callFeed.purpose}"` +
                     `) to peer connection`,
                 );
-                newSender = this.peerConn.addTrack(track, this.localUsermediaStream);
+                newSender = this.peerConn.addTransceiver(track, {
+                    streams: [this.localUsermediaStream],
+                });
             }
 
             newSenders.push(newSender);
@@ -1845,11 +1902,12 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
         logger.warn(`Received DC ${json.op} event`, json);
 
         switch (json.op) {
-            case "offer":
+            case "offer": {
                 try {
+                    const offer = json as ISfuOfferDataChannelMessage;
                     await this.peerConn.setRemoteDescription({
                         "type": "offer",
-                        "sdp": json.sdp,
+                        "sdp": offer.sdp,
                     });
 
                     const answer = await this.peerConn.createAnswer();
@@ -1864,10 +1922,15 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     this.terminate(CallParty.Local, CallErrorCode.SetRemoteDescription, false);
                     return;
                 }
+            }
                 break;
-            case "error":
-                logger.error("Received DC error event", json.message);
-
+            case "answer": {
+                const answer = json as ISfuAnswerDataChannelMessage;
+                await this.peerConn.setRemoteDescription({
+                    type: "answer",
+                    sdp: answer.sdp,
+                });
+            }
                 break;
             default:
                 logger.warn("Ignoring unrecognized DC event op ", json.op);
@@ -2219,7 +2282,7 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
 
         for (const trans of this.peerConn.getTransceivers()) {
             if (
-                this.screensharingSenders.includes(trans.sender) &&
+                this.screensharingSenders.includes(trans) &&
                     (
                         trans.sender.track?.kind === "video" ||
                         trans.receiver.track?.kind === "video"
@@ -2231,6 +2294,8 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
     }
 
     private onNegotiationNeeded = async (): Promise<void> => {
+        if (this.client.getSFU() && this.state !== CallState.CreateOffer) return;
+
         logger.info(`Call ${this.callId} Negotiation is needed!`);
 
         if (this.state !== CallState.CreateOffer && this.opponentVersion === 0) {
