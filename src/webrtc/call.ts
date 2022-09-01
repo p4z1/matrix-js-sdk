@@ -312,6 +312,10 @@ function getMsidByMid(sdp: SessionDescription, mid: string): string[] {
     return sdp?.media?.find((m) => m.mid == mid)?.msid?.split(" ");
 }
 
+function isFirefox(): boolean {
+    return navigator.userAgent.indexOf('Firefox') !== -1;
+}
+
 export type CallEventHandlerMap = {
     [CallEvent.DataChannel]: (channel: RTCDataChannel) => void;
     [CallEvent.FeedsChanged]: (feeds: CallFeed[]) => void;
@@ -798,23 +802,31 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     `) to peer connection`,
                 );
                 if (track.kind === "video") {
-                    transceiverArray.push(this.peerConn.addTransceiver(track, {
+                    const encodings = [
+                        // Order is important here: some browsers (e.g.
+                        // Chrome) will only send some of the encodings, if
+                        // the track has a resolution to low for it to send
+                        // all, in that case the encoding higher in the list
+                        // has priority and therefore we put full as first
+                        // as we always want to send the full resolution
+                        { maxBitrate: 4_500_000, rid: SimulcastResolution.Full },
+                        { maxBitrate: 1_500_000, rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
+                        { maxBitrate: 300_000, rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
+                        //{  rid: SimulcastResolution.Full },
+                        //{ rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
+                        //{ rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
+                    ];
+
+                    const transceiver = this.peerConn.addTransceiver(track, {
                         streams: [callFeed.stream],
-                        sendEncodings: [
-                            // Order is important here: some browsers (e.g.
-                            // Chrome) will only send some of the encodings, if
-                            // the track has a resolution to low for it to send
-                            // all, in that case the encoding higher in the list
-                            // has priority and therefore we put full as first
-                            // as we always want to send the full resolution
-                            { maxBitrate: 4_500_000, rid: SimulcastResolution.Full },
-                            { maxBitrate: 1_500_000, rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
-                            { maxBitrate: 300_000, rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
-                            //{  rid: SimulcastResolution.Full },
-                            //{ rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
-                            //{ rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
-                        ],
-                    }));
+                        sendEncodings: isFirefox ? undefined : encodings,
+                    });
+
+                    if (isFirefox) {
+                        transceiver.sender.setParameters({ ...transceiver.sender.getParameters(), encodings });
+                    }
+
+                    transceiverArray.push(transceiver);
                 } else {
                     transceiverArray.push(this.peerConn.addTransceiver(track, {
                         streams: [callFeed.stream],
