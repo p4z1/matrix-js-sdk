@@ -22,7 +22,7 @@ limitations under the License.
  * @module webrtc/call
  */
 
-import { parse as parseSdp, write as writeSdp } from "sdp-transform";
+import { parse as parseSdp, SessionDescription, write as writeSdp } from "sdp-transform";
 
 import { logger } from '../logger';
 import * as utils from '../utils';
@@ -54,8 +54,9 @@ import {
     SFUDataChannelMessageOp,
     ISfuMetadataDataChannelMessage,
     SDPStreamMetadataTracks,
+    SimulcastResolution,
 } from './callEventTypes';
-import { CallFeed } from './callFeed';
+import { CallFeed, CallFeedEvent } from './callFeed';
 import { MatrixClient } from "../client";
 import { EventEmitterEvents, TypedEventEmitter } from "../models/typed-event-emitter";
 import { DeviceInfo } from '../crypto/deviceinfo';
@@ -304,6 +305,11 @@ function getCodecParamMods(isPtt: boolean): CodecParamsMod[] {
     ] as CodecParamsMod[];
 
     return mods;
+}
+
+function getMsidByMid(sdp: SessionDescription, mid: string): string[] {
+    // XXX: We only use double equals because MediaDescription::mid is in fact a number
+    return sdp?.media?.find((m) => m.mid == mid)?.msid?.split(" ");
 }
 
 export type CallEventHandlerMap = {
@@ -609,10 +615,15 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             const tracks = (localFeed.purpose === SDPStreamMetadataPurpose.Usermedia
                 ? this.usermediaTransceivers
                 : this.screensharingTransceivers).reduce((tracks, transceiver) => {
-                // XXX: We only use double equals because MediaDescription::mid is in fact a number
-                const trackId = sdp?.media?.find((m) => m.mid == transceiver.mid)?.msid?.split(" ")?.[1];
+                const trackId = getMsidByMid(sdp, transceiver.mid)?.[1];
                 if (trackId) {
-                    tracks[trackId] = {};
+                    tracks[trackId] = {
+                        kind: transceiver.sender.track.kind,
+                    };
+                    if (transceiver.sender.track.kind == "video") {
+                        tracks[trackId].width = transceiver.sender.track.getSettings().width;
+                        tracks[trackId].height = transceiver.sender.track.getSettings().height;
+                    }
                 }
                 return tracks;
             }, {} as SDPStreamMetadataTracks);
@@ -666,7 +677,7 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             return;
         }
 
-        this.feeds.push(new CallFeed({
+        const feed = new CallFeed({
             client: this.client,
             roomId: this.roomId,
             userId,
@@ -674,7 +685,10 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
             purpose,
             audioMuted,
             videoMuted,
-        }));
+        });
+        this.feeds.push(feed);
+        feed.addListener(CallFeedEvent.SizeChanged, this.onCallFeedSizeChanged);
+
         this.emit(CallEvent.FeedsChanged, this.feeds);
 
         logger.info(
@@ -783,9 +797,29 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                     `enabled=${track.enabled}` +
                     `) to peer connection`,
                 );
-                transceiverArray.push(this.peerConn.addTransceiver(track, {
-                    streams: [callFeed.stream],
-                }));
+                if (track.kind === "video") {
+                    transceiverArray.push(this.peerConn.addTransceiver(track, {
+                        streams: [callFeed.stream],
+                        sendEncodings: [
+                            // Order is important here: some browsers (e.g.
+                            // Chrome) will only send some of the encodings, if
+                            // the track has a resolution to low for it to send
+                            // all, in that case the encoding higher in the list
+                            // has priority and therefore we put full as first
+                            // as we always want to send the full resolution
+                            { maxBitrate: 4_500_000, rid: SimulcastResolution.Full },
+                            { maxBitrate: 1_500_000, rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
+                            { maxBitrate: 300_000, rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
+                            //{  rid: SimulcastResolution.Full },
+                            //{ rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
+                            //{ rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
+                        ],
+                    }));
+                } else {
+                    transceiverArray.push(this.peerConn.addTransceiver(track, {
+                        streams: [callFeed.stream],
+                    }));
+                }
             }
         }
 
@@ -1963,6 +1997,25 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
         }
         return;
     }
+
+    private onCallFeedSizeChanged = async (feed: CallFeed, width: number, height: number): Promise<void> => {
+        await this.waitForDatachannelToBeOpen();
+        if (!this.remoteSDPStreamMetadata) return;
+        if (this.dataChannel.readyState !== "open") return;
+
+        const trackId = Object.entries(this.remoteSDPStreamMetadata[feed.stream.id].tracks).find(([_, info]) => (
+            info.kind === "video"
+        ))[0];
+
+        this.sendSFUDataChannelMessage(SFUDataChannelMessageOp.Select, {
+            start: [{
+                track_id: trackId,
+                stream_id: feed.stream.id,
+                width: Math.round(width),
+                height: Math.round(height),
+            }],
+        } as ISfuSelectDataChannelMessage);
+    };
 
     public async subscribeToSFU(): Promise<void> {
         await this.waitForDatachannelToBeOpen();

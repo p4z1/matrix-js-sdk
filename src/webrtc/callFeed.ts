@@ -24,6 +24,7 @@ import { TypedEventEmitter } from "../models/typed-event-emitter";
 const POLLING_INTERVAL = 200; // ms
 export const SPEAKING_THRESHOLD = -60; // dB
 const SPEAKING_SAMPLE_COUNT = 8; // samples
+const SIZE_CHANGED_EVENT_DELAY = 2000; // ms
 
 export interface ICallFeedOpts {
     client: MatrixClient;
@@ -48,6 +49,7 @@ export enum CallFeedEvent {
     VolumeChanged = "volume_changed",
     Speaking = "speaking",
     Disposed = "disposed",
+    SizeChanged = "size_changed"
 }
 
 type EventHandlerMap = {
@@ -57,6 +59,7 @@ type EventHandlerMap = {
     [CallFeedEvent.VolumeChanged]: (volume: number) => void;
     [CallFeedEvent.Speaking]: (speaking: boolean) => void;
     [CallFeedEvent.Disposed]: () => void;
+    [CallFeedEvent.SizeChanged]: (feed: CallFeed, width: number, height: number) => void;
 };
 
 export class CallFeed extends TypedEventEmitter<CallFeedEvent, EventHandlerMap> {
@@ -78,6 +81,7 @@ export class CallFeed extends TypedEventEmitter<CallFeedEvent, EventHandlerMap> 
     private speakingThreshold = SPEAKING_THRESHOLD;
     private speaking = false;
     private volumeLooperTimeout: ReturnType<typeof setTimeout>;
+    private sizeChangedTimeout: ReturnType<typeof setTimeout>;
     private _disposed = false;
 
     constructor(opts: ICallFeedOpts) {
@@ -317,5 +321,15 @@ export class CallFeed extends TypedEventEmitter<CallFeedEvent, EventHandlerMap> 
     public setLocalVolume(localVolume: number): void {
         this.localVolume = localVolume;
         this.emit(CallFeedEvent.LocalVolumeChanged, localVolume);
+    }
+
+    public setResolution(width: number, height: number): void {
+        if (this.isLocal()) return;
+
+        // We should throttle this more intelligently depending on the use case
+        clearTimeout(this.sizeChangedTimeout);
+        this.sizeChangedTimeout = setTimeout(() => {
+            this.emit(CallFeedEvent.SizeChanged, this, width, height);
+        }, SIZE_CHANGED_EVENT_DELAY);
     }
 }

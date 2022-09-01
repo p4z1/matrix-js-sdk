@@ -11,7 +11,17 @@ export enum SDPStreamMetadataPurpose {
     Screenshare = "m.screenshare",
 }
 
-export interface SDPStreamMetadataTrack {}
+export enum SimulcastResolution {
+    Full = "f",
+    Half = "h",
+    Quarter = "q",
+}
+
+export interface SDPStreamMetadataTrack {
+    kind: string;
+    width?: number;
+    height?: number;
+}
 
 export interface SDPStreamMetadataTracks {
     [key: string]: SDPStreamMetadataTrack;
@@ -101,6 +111,8 @@ export interface MCallHangupReject extends MCallBase {
 export interface ISfuTrackDesc {
     stream_id: string;
     track_id: string;
+    width?: number;
+    height?: number;
 }
 
 export enum SFUDataChannelMessageOp {
