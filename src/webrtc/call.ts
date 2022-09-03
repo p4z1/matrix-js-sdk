@@ -819,10 +819,10 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
 
                     const transceiver = this.peerConn.addTransceiver(track, {
                         streams: [callFeed.stream],
-                        sendEncodings: isFirefox ? undefined : encodings,
+                        sendEncodings: isFirefox() ? undefined : encodings,
                     });
 
-                    if (isFirefox) {
+                    if (isFirefox()) {
                         transceiver.sender.setParameters({ ...transceiver.sender.getParameters(), encodings });
                     }
 
