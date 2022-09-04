@@ -334,8 +334,6 @@ export class MediaHandler extends TypedEventEmitter<
     }
 
     private getUserMediaContraints(audio: boolean, video: boolean): MediaStreamConstraints {
-        const isWebkit = !!navigator.webkitGetUserMedia;
-
         return {
             audio: audio
                 ? {
@@ -345,11 +343,8 @@ export class MediaHandler extends TypedEventEmitter<
             video: video
                 ? {
                     deviceId: this.videoInput ? { ideal: this.videoInput } : undefined,
-                    //Chrome will give it only if we ask exactly, FF refuses
-                    //entirely if we ask exactly, so have to ask for ideal
-                    //instead
-                    width: isWebkit ? { exact: 1920 } : { ideal: 1920 },
-                    height: isWebkit ? { exact: 1080 } : { ideal: 1080 },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
                 }
                 : false,
         };
