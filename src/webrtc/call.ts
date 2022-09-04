@@ -812,9 +812,6 @@ export class MatrixCall extends TypedEventEmitter<CallEvent, CallEventHandlerMap
                         { maxBitrate: 4_500_000, rid: SimulcastResolution.Full },
                         { maxBitrate: 1_500_000, rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
                         { maxBitrate: 300_000, rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
-                        //{  rid: SimulcastResolution.Full },
-                        //{ rid: SimulcastResolution.Half, scaleResolutionDownBy: 2.0 },
-                        //{ rid: SimulcastResolution.Quarter, scaleResolutionDownBy: 4.0 },
                     ];
 
                     const transceiver = this.peerConn.addTransceiver(track, {
