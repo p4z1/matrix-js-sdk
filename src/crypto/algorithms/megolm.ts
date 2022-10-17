@@ -20,6 +20,7 @@ limitations under the License.
 
 import { v4 as uuidv4 } from "uuid";
 
+import type { IEventDecryptionResult } from "../../@types/crypto";
 import { logger } from '../../logger';
 import * as olmlib from "../olmlib";
 import {
@@ -40,7 +41,6 @@ import { IContent, MatrixEvent } from "../../models/event";
 import { EventType, MsgType, ToDeviceMessageId } from '../../@types/event';
 import {
     IMegolmEncryptedContent,
-    IEventDecryptionResult,
     IMegolmSessionData,
     IncomingRoomKeyRequest,
     IEncryptedContent,
