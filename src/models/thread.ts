@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Matrix.org Foundation C.I.C.
+Copyright 2021-2022 The Matrix.org Foundation C.I.C.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -216,7 +216,9 @@ export class Thread extends ReadReceipt<EmittedEvents, EventHandlerMap> {
         if (!event.isRelation(THREAD_RELATION_TYPE.name)) return;
 
         await this.updateThreadMetadata();
-        this.emit(ThreadEvent.NewReply, this, event);
+        if (this.lastEvent?.getId() !== event.getId()) {
+            this.emit(ThreadEvent.NewReply, this, event);
+        }
     };
 
     public get roomState(): RoomState {
@@ -307,9 +309,8 @@ export class Thread extends ReadReceipt<EmittedEvents, EventHandlerMap> {
             this.replyCount = bundledRelationship.count;
             this._currentUserParticipated = !!bundledRelationship.current_user_participated;
 
-            const mapper = this.client.getEventMapper();
             // re-insert roomId
-            this.lastEvent = mapper({
+            this.lastEvent = new MatrixEvent({
                 ...bundledRelationship.latest_event,
                 room_id: this.roomId,
             });
@@ -394,11 +395,6 @@ export class Thread extends ReadReceipt<EmittedEvents, EventHandlerMap> {
      * Finds an event by ID in the current thread
      */
     public findEventById(eventId: string): MatrixEvent | undefined {
-        // Check the lastEvent as it may have been created based on a bundled relationship and not in a timeline
-        if (this.lastEvent?.getId() === eventId) {
-            return this.lastEvent;
-        }
-
         return this.timelineSet.findEventById(eventId);
     }
 
@@ -429,7 +425,8 @@ export class Thread extends ReadReceipt<EmittedEvents, EventHandlerMap> {
     }
 
     /**
-     * A getter for the last event added to the thread, if known.
+     * A getter for the last event of the thread.
+     * This might be a synthesized event, if so, it will not emit any events to listeners.
      */
     public get replyToEvent(): Optional<MatrixEvent> {
         return this.lastPendingEvent ?? this.lastEvent ?? this.lastReply();
