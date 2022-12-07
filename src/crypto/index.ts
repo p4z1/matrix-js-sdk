@@ -88,6 +88,7 @@ import { IContent } from "../models/event";
 import { ISyncResponse } from "../sync-accumulator";
 import { ISignatures } from "../@types/signed";
 import { IMessage } from "./algorithms/olm";
+import { CryptoBackend } from "../common-crypto/CryptoBackend";
 
 const DeviceVerification = DeviceInfo.DeviceVerification;
 
@@ -359,7 +360,7 @@ export type CryptoEventHandlerMap = {
     [CryptoEvent.UserCrossSigningUpdated]: (userId: string) => void;
 };
 
-export class Crypto extends TypedEventEmitter<CryptoEvent, CryptoEventHandlerMap> {
+export class Crypto extends TypedEventEmitter<CryptoEvent, CryptoEventHandlerMap> implements CryptoBackend {
     /**
      * @returns The version of Olm.
      */
@@ -4001,4 +4002,4 @@ class IncomingRoomKeyRequestCancellation {
 }
 
 // IEventDecryptionResult is re-exported for backwards compatibility, in case any applications are referencing it.
-export { IEventDecryptionResult } from "../@types/crypto";
+export type { IEventDecryptionResult } from "../@types/crypto";
