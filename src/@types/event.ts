@@ -166,6 +166,15 @@ export const UNSTABLE_MSC3089_BRANCH = new UnstableValue("m.branch", "org.matrix
 export const UNSTABLE_MSC2716_MARKER = new UnstableValue("m.room.marker", "org.matrix.msc2716.marker");
 
 /**
+ * Server-side feature to also redact related events by providing `with_relations` in the redaction event content.
+ * {@link https://github.com/matrix-org/matrix-spec-proposals/pull/3912}
+ */
+export const UNSTABLE_MSC3912_RELATION_BASED_REDACTIONS = new UnstableValue(
+    "org.matrix.msc3912.stable",
+    "org.matrix.msc3912",
+);
+
+/**
  * Functional members type for declaring a purpose of room members (e.g. helpful bots).
  * Note that this reference is UNSTABLE and subject to breaking changes, including its
  * eventual removal.

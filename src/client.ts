@@ -154,6 +154,7 @@ import {
     UNSTABLE_MSC3088_ENABLED,
     UNSTABLE_MSC3088_PURPOSE,
     UNSTABLE_MSC3089_TREE_SUBTYPE,
+    UNSTABLE_MSC3912_RELATION_BASED_REDACTIONS,
 } from "./@types/event";
 import { IdServerUnbindResult, IImageInfo, Preset, Visibility } from "./@types/partials";
 import { EventMapper, eventMapperFor, MapperOpts } from "./event-mapper";
@@ -4355,20 +4356,20 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      * @returns Promise which resolves: TODO
      * @returns Rejects: with an error response.
      */
-    public redactEvent(
+    public async redactEvent(
         roomId: string,
         eventId: string,
         txnId?: string | undefined,
         opts?: IRedactOpts,
     ): Promise<ISendEventResponse>;
-    public redactEvent(
+    public async redactEvent(
         roomId: string,
         threadId: string | null,
         eventId: string,
         txnId?: string | undefined,
         opts?: IRedactOpts,
     ): Promise<ISendEventResponse>;
-    public redactEvent(
+    public async redactEvent(
         roomId: string,
         threadId: string | null,
         eventId?: string,
@@ -4382,9 +4383,20 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
             threadId = null;
         }
         const reason = opts?.reason;
+
+        if (opts?.with_relations && !await this.supportsRelationBasedRedactions()) {
+            throw new Error(
+                "Server does not support relation based redactions "
+                + `roomId ${roomId} eventId ${eventId} txnId: ${txnId} threadId ${threadId}`,
+            );
+        }
+
         return this.sendCompleteEvent(roomId, threadId, {
             type: EventType.RoomRedaction,
-            content: { reason },
+            content: {
+                ...(opts?.with_relations ? { with_relations: opts?.with_relations } : {}),
+                reason,
+            },
             redacts: eventId,
         }, txnId as string);
     }
@@ -9263,6 +9275,11 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      */
     public supportsExperimentalThreads(): boolean {
         return this.clientOpts?.experimentalThreadSupport || false;
+    }
+
+    public async supportsRelationBasedRedactions(): Promise<boolean> {
+        return await this.doesServerSupportUnstableFeature(UNSTABLE_MSC3912_RELATION_BASED_REDACTIONS.stable!)
+            || await this.doesServerSupportUnstableFeature(UNSTABLE_MSC3912_RELATION_BASED_REDACTIONS.unstable!);
     }
 
     /**
